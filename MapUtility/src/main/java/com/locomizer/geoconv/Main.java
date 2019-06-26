@@ -3,7 +3,6 @@ package com.locomizer.geoconv;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.uber.h3core.H3Core;
 import com.uber.h3core.util.GeoCoord;
-import de.micromata.opengis.kml.v_2_2_0.Data;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
@@ -26,10 +25,23 @@ import java.util.stream.Collectors;
 
 
 public class Main {
-    private static GeometryFactory factory = new GeometryFactory();
-    private static GeoJSONReader reader = new GeoJSONReader();
-    private static GeoJSONWriter writer = new GeoJSONWriter();
+    public static final String JSON = "json";
+    public static final String KML = "kml";
+    public static final String H_3 = "h3(";
 
+    public static final String INDEX = "index";
+    public static final String NAME = "name";
+    public static final String ADDRESS = "address";
+    public static final String ID = "id";
+    public static final String DESCRIPTION = "description";
+    public static final String PHONE_NUMBER = "phoneNumber";
+
+    public static final Character COMMA = ',';
+    public static final String COMMA_STR = COMMA.toString();
+
+    private static final GeometryFactory FACTORY = new GeometryFactory();
+
+    @SuppressWarnings("ConstantConditions")
     public static void main(String[] args) throws Exception {
         if (args.length != 4) {
             printHelpAndExit();
@@ -39,40 +51,41 @@ public class Main {
         int resolution = -1;
         try {
             in = args[0].toLowerCase();
-            if (!in.equals("json") && !in.equals("kml") && !in.startsWith("h3(")) {
+            if (!in.equals(JSON) && !in.equals(KML) && !in.startsWith(H_3)) {
                 printHelpAndExit();
             }
 
             out = args[1].toLowerCase();
-            if (!out.equals("json") && !out.equals("kml") && !out.startsWith("h3(")) {
+            if (!out.equals(JSON) && !out.equals(KML) && !out.startsWith(H_3)) {
                 printHelpAndExit();
             }
         } catch (Exception e) {
             printHelpAndExit();
         }
 
-        if (in.equals(out) || (in.startsWith("h3(") && out.startsWith("h3("))) {
+        if (in.equals(out) || (in.startsWith(H_3) && out.startsWith(H_3))) {
+
             printHelpAndExit();
         }
 
         List<String> columns = null;
 
-        if (in.startsWith("h3(")) {
-            columns = Arrays.stream(args[0].substring(3, args[0].length() - 1).split(","))
+        if (in.startsWith(H_3)) {
+            columns = Arrays.stream(args[0].substring(3, args[0].length() - 1).split(COMMA_STR))
                     .map(String::trim)
                     .collect(Collectors.toList());
 
-            if (columns.isEmpty() || !columns.contains("index")) {
+            if (columns.isEmpty() || !columns.contains(INDEX)) {
                 printHelpAndExit();
             }
         }
 
-        if (out.startsWith("h3(")) {
-            columns = Arrays.stream(args[1].substring(3, args[1].length() - 1).split(","))
+        if (out.startsWith(H_3)) {
+            columns = Arrays.stream(args[1].substring(3, args[1].length() - 1).split(COMMA_STR))
                     .map(String::trim)
                     .collect(Collectors.toList());
 
-            if (columns.isEmpty() || !columns.contains("index")) {
+            if (columns.isEmpty() || !columns.contains(INDEX)) {
                 printHelpAndExit();
             }
 
@@ -100,8 +113,9 @@ public class Main {
         Map<Geometry, Map<String, Object>> geometries = new HashMap<>();
 
 
-        if ("json".equals(in)) {
+        if (JSON.equals(in)) {
             GeoJSON json = GeoJSONFactory.create(input);
+            GeoJSONReader reader = new GeoJSONReader();
 
             if (json instanceof Feature) {
                 Feature feature = (Feature) json;
@@ -118,7 +132,7 @@ public class Main {
             }
         }
 
-        if ("kml".equals(in)) {
+        if (KML.equals(in)) {
             de.micromata.opengis.kml.v_2_2_0.Kml kml = de.micromata.opengis.kml.v_2_2_0.Kml.unmarshal(input);
 
             de.micromata.opengis.kml.v_2_2_0.Feature f = kml.getFeature();
@@ -126,14 +140,11 @@ public class Main {
             feature(geometries, f);
         }
 
-        if (in.startsWith("h3(")) {
+        if (in.startsWith(H_3)) {
             H3Core h3core = H3Core.newInstance();
 
-            try (CSVParser parser = new CSVParser(new StringReader(input), CSVFormat.EXCEL)) {
-                Iterator<CSVRecord> it = parser.iterator();
-                while (it.hasNext()) {
-                    CSVRecord rec = it.next();
-
+            try (CSVParser parser = new CSVParser(new StringReader(input), CSVFormat.EXCEL.withDelimiter(COMMA))) {
+                for (CSVRecord rec : parser) {
                     Map<String, Object> props = new HashMap<>();
 
                     Long hash = null;
@@ -142,7 +153,7 @@ public class Main {
 
                         if (!col.equals("_")) {
                             String c = rec.get(i);
-                            if (col.equals("index")) {
+                            if (col.equals(INDEX)) {
                                 hash = Long.parseLong(c, 16);
                             }
                             props.put(col, c);
@@ -155,14 +166,14 @@ public class Main {
                     List<Coordinate> cl = new ArrayList<>();
                     geo.forEach(c -> cl.add(new Coordinate(c.lng, c.lat)));
 
-                    Polygon polygon = factory.createPolygon(cl.toArray(new Coordinate[0]));
+                    Polygon polygon = FACTORY.createPolygon(cl.toArray(new Coordinate[0]));
 
                     geometries.put(polygon, props);
                 }
             }
         }
 
-        if (out.startsWith("h3(")) {
+        if (out.startsWith(H_3)) {
             H3Core h3core = H3Core.newInstance();
 
             HashMap<Long, Map<String, Object>> hashes = new HashMap<>();
@@ -204,10 +215,10 @@ public class Main {
                 }
             }
 
-            try (CSVPrinter printer = new CSVPrinter(new BufferedWriter(new FileWriter(outFile), 4096 * 1024), CSVFormat.EXCEL)) {
+            try (CSVPrinter printer = new CSVPrinter(new BufferedWriter(new FileWriter(outFile), 4096 * 1024), CSVFormat.EXCEL.withDelimiter(COMMA))) {
                 for (Map.Entry<Long, Map<String, Object>> h : hashes.entrySet()) {
                     for (String col : columns) {
-                        if ("index".equals(col)) {
+                        if (INDEX.equals(col)) {
                             printer.print(Long.toHexString(h.getKey()));
                         } else {
                             printer.print(h.getValue().get(col));
@@ -218,7 +229,7 @@ public class Main {
             }
         }
 
-        if ("kml".equals(out)) {
+        if (KML.equals(out)) {
             de.micromata.opengis.kml.v_2_2_0.Kml kml = new de.micromata.opengis.kml.v_2_2_0.Kml();
             de.micromata.opengis.kml.v_2_2_0.Document kmlCollection = kml.createAndSetDocument();
 
@@ -227,24 +238,24 @@ public class Main {
                 de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.createAndSetExtendedData();
 
                 res.getValue().forEach((k, v) -> {
-                    switch (k.toLowerCase()) {
-                        case "name": {
+                    switch (k) {
+                        case NAME: {
                             pm.setName(String.valueOf(v));
                             break;
                         }
-                        case "address": {
+                        case ADDRESS: {
                             pm.setAddress(String.valueOf(v));
                             break;
                         }
-                        case "id": {
+                        case ID: {
                             pm.setId(String.valueOf(v));
                             break;
                         }
-                        case "description": {
+                        case DESCRIPTION: {
                             pm.setDescription(String.valueOf(v));
                             break;
                         }
-                        case "phonenumber": {
+                        case PHONE_NUMBER: {
                             pm.setPhoneNumber(String.valueOf(v));
                             break;
                         }
@@ -290,7 +301,9 @@ public class Main {
             kml.marshal(outFile);
         }
 
-        if ("json".equals(out)) {
+        if (JSON.equals(out)) {
+            GeoJSONWriter writer = new GeoJSONWriter();
+
             List<Feature> fl = new ArrayList<>();
 
             geometries.forEach((k, v) -> fl.add(new Feature(writer.write(k), v)));
@@ -382,7 +395,7 @@ public class Main {
             Map<String, Object> properties = new HashMap<>();
             de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.getExtendedData();
             if (ed != null) {
-                List<Data> d = ed.getData();
+                List<de.micromata.opengis.kml.v_2_2_0.Data> d = ed.getData();
                 if (d != null) {
                     for (de.micromata.opengis.kml.v_2_2_0.Data dd : d) {
                         properties.put(dd.getName(), dd.getValue());
@@ -391,23 +404,23 @@ public class Main {
             }
             String v = pm.getName();
             if (v != null) {
-                properties.put("name", v);
+                properties.put(NAME, v);
             }
             v = pm.getAddress();
             if (v != null) {
-                properties.put("address", v);
+                properties.put(ADDRESS, v);
             }
             v = pm.getId();
             if (v != null) {
-                properties.put("id", v);
+                properties.put(ID, v);
             }
             v = pm.getDescription();
             if (v != null) {
-                properties.put("description", v);
+                properties.put(DESCRIPTION, v);
             }
             v = pm.getPhoneNumber();
             if (v != null) {
-                properties.put("phoneNumber", v);
+                properties.put(PHONE_NUMBER, v);
             }
 
             de.micromata.opengis.kml.v_2_2_0.Geometry g = pm.getGeometry();
@@ -438,7 +451,7 @@ public class Main {
             for (de.micromata.opengis.kml.v_2_2_0.Coordinate c : lc) {
                 lco.add(new Coordinate(c.getLongitude(), c.getLatitude()));
             }
-            LinearRing lro = factory.createLinearRing(lco.toArray(new Coordinate[0]));
+            LinearRing lro = FACTORY.createLinearRing(lco.toArray(new Coordinate[0]));
 
             List<LinearRing> lri = new ArrayList<>();
             List<de.micromata.opengis.kml.v_2_2_0.Boundary> lb = p.getInnerBoundaryIs();
@@ -448,10 +461,10 @@ public class Main {
                 for (de.micromata.opengis.kml.v_2_2_0.Coordinate c : lc) {
                     lco.add(new Coordinate(c.getLongitude(), c.getLatitude()));
                 }
-                lri.add(factory.createLinearRing(lco.toArray(new Coordinate[0])));
+                lri.add(FACTORY.createLinearRing(lco.toArray(new Coordinate[0])));
             }
 
-            Polygon res = factory.createPolygon(lro, lri.toArray(new LinearRing[0]));
+            Polygon res = FACTORY.createPolygon(lro, lri.toArray(new LinearRing[0]));
             result.put(res, properties);
         }
 
@@ -463,9 +476,9 @@ public class Main {
             for (de.micromata.opengis.kml.v_2_2_0.Coordinate c : lc) {
                 lco.add(new Coordinate(c.getLongitude(), c.getLatitude()));
             }
-            LinearRing lro = factory.createLinearRing(lco.toArray(new Coordinate[0]));
+            LinearRing lro = FACTORY.createLinearRing(lco.toArray(new Coordinate[0]));
 
-            Polygon res = factory.createPolygon(lro);
+            Polygon res = FACTORY.createPolygon(lro);
             result.put(res, properties);
         }
 
@@ -476,7 +489,7 @@ public class Main {
 
             Coordinate cc = new Coordinate(c.getLongitude(), c.getLatitude());
 
-            Point res = factory.createPoint(cc);
+            Point res = FACTORY.createPoint(cc);
             result.put(res, properties);
         }
     }
