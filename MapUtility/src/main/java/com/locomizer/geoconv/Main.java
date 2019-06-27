@@ -6,7 +6,6 @@ import com.uber.h3core.util.GeoCoord;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
-import org.apache.commons.csv.CSVRecord;
 import org.locationtech.jts.geom.*;
 import org.wololo.geojson.Feature;
 import org.wololo.geojson.FeatureCollection;
@@ -21,9 +20,13 @@ import java.io.FileWriter;
 import java.io.StringReader;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 
+@SuppressWarnings({"ConstantConditions","Duplicates"})
 public class Main {
     public static final String JSON = "json";
     public static final String KML = "kml";
@@ -36,12 +39,13 @@ public class Main {
     public static final String DESCRIPTION = "description";
     public static final String PHONE_NUMBER = "phoneNumber";
 
+    public static final String UNDERSCORE = "_";
+
     public static final Character COMMA = ',';
     public static final String COMMA_STR = COMMA.toString();
 
     private static final GeometryFactory FACTORY = new GeometryFactory();
 
-    @SuppressWarnings("ConstantConditions")
     public static void main(String[] args) throws Exception {
         if (args.length != 4) {
             printHelpAndExit();
@@ -110,7 +114,7 @@ public class Main {
 
 
         String input = new String(Files.readAllBytes(inFile.toPath()));
-        Map<Geometry, Map<String, Object>> geometries = new HashMap<>();
+        Map<Geometry, Map<String, Object>> geometries = new ConcurrentHashMap<>();
 
 
         if (JSON.equals(in)) {
@@ -124,9 +128,8 @@ public class Main {
             } else if (json instanceof FeatureCollection) {
                 FeatureCollection collection = (FeatureCollection) json;
 
-                for (Feature feature : collection.getFeatures()) {
-                    feature(geometries, reader, feature);
-                }
+                Arrays.stream(collection.getFeatures()).parallel()
+                        .forEach(feature -> feature(geometries, reader, feature));
             } else {
                 throw new RuntimeException("Input JSON root element was neither Feature nor FeatureCollection");
             }
@@ -135,85 +138,125 @@ public class Main {
         if (KML.equals(in)) {
             de.micromata.opengis.kml.v_2_2_0.Kml kml = de.micromata.opengis.kml.v_2_2_0.Kml.unmarshal(input);
 
-            de.micromata.opengis.kml.v_2_2_0.Feature f = kml.getFeature();
+            de.micromata.opengis.kml.v_2_2_0.Feature feature = kml.getFeature();
 
-            feature(geometries, f);
+            if (feature instanceof de.micromata.opengis.kml.v_2_2_0.Placemark) {
+                de.micromata.opengis.kml.v_2_2_0.Placemark p = (de.micromata.opengis.kml.v_2_2_0.Placemark) feature;
+
+                placemark(geometries, p);
+            } else {
+                List<de.micromata.opengis.kml.v_2_2_0.Container> containers = new ArrayList<>();
+                container(containers, feature);
+
+                containers.parallelStream()
+                        .forEach(container -> {
+                            if (container instanceof de.micromata.opengis.kml.v_2_2_0.Document) {
+                                de.micromata.opengis.kml.v_2_2_0.Document d = (de.micromata.opengis.kml.v_2_2_0.Document) container;
+
+                                for (de.micromata.opengis.kml.v_2_2_0.Feature f : d.getFeature()) {
+                                    if (f instanceof de.micromata.opengis.kml.v_2_2_0.Placemark) {
+                                        de.micromata.opengis.kml.v_2_2_0.Placemark p = (de.micromata.opengis.kml.v_2_2_0.Placemark) f;
+
+                                        placemark(geometries, p);
+                                    }
+                                }
+                            }
+
+                            if (container instanceof de.micromata.opengis.kml.v_2_2_0.Folder) {
+                                de.micromata.opengis.kml.v_2_2_0.Folder fo = (de.micromata.opengis.kml.v_2_2_0.Folder) container;
+
+                                for (de.micromata.opengis.kml.v_2_2_0.Feature f : fo.getFeature()) {
+                                    if (f instanceof de.micromata.opengis.kml.v_2_2_0.Placemark) {
+                                        de.micromata.opengis.kml.v_2_2_0.Placemark p = (de.micromata.opengis.kml.v_2_2_0.Placemark) f;
+
+                                        placemark(geometries, p);
+                                    }
+                                }
+                                containers.add(fo);
+                            }
+                        });
+            }
         }
 
         if (in.startsWith(H_3)) {
             H3Core h3core = H3Core.newInstance();
 
             try (CSVParser parser = new CSVParser(new StringReader(input), CSVFormat.EXCEL.withDelimiter(COMMA))) {
-                for (CSVRecord rec : parser) {
-                    Map<String, Object> props = new HashMap<>();
+                List<String> _columns = columns;
 
-                    Long hash = null;
-                    for (int i = columns.size(); i > 0; ) {
-                        String col = columns.get(--i);
+                StreamSupport.stream(parser.spliterator(), true)
+                        .forEach(rec -> {
+                            Map<String, Object> props = new HashMap<>();
 
-                        if (!col.equals("_")) {
-                            String c = rec.get(i);
-                            if (col.equals(INDEX)) {
-                                hash = Long.parseLong(c, 16);
+                            Long hash = null;
+                            for (int i = _columns.size(); i > 0; ) {
+                                String col = _columns.get(--i);
+
+                                if (!col.equals(UNDERSCORE)) {
+                                    String c = rec.get(i);
+                                    if (col.equals(INDEX)) {
+                                        hash = Long.parseLong(c, 16);
+                                    }
+                                    props.put(col, c);
+                                }
                             }
-                            props.put(col, c);
-                        }
-                    }
 
-                    List<GeoCoord> geo = h3core.h3ToGeoBoundary(hash);
-                    geo.add(geo.get(0));
+                            List<GeoCoord> geo = h3core.h3ToGeoBoundary(hash);
+                            geo.add(geo.get(0));
 
-                    List<Coordinate> cl = new ArrayList<>();
-                    geo.forEach(c -> cl.add(new Coordinate(c.lng, c.lat)));
+                            List<Coordinate> cl = new ArrayList<>();
+                            geo.forEach(c -> cl.add(new Coordinate(c.lng, c.lat)));
 
-                    Polygon polygon = FACTORY.createPolygon(cl.toArray(new Coordinate[0]));
+                            Polygon polygon = FACTORY.createPolygon(cl.toArray(new Coordinate[0]));
 
-                    geometries.put(polygon, props);
-                }
+                            geometries.put(polygon, props);
+                        });
             }
         }
 
         if (out.startsWith(H_3)) {
             H3Core h3core = H3Core.newInstance();
 
-            HashMap<Long, Map<String, Object>> hashes = new HashMap<>();
+            Map<Long, Map<String, Object>> hashes = new ConcurrentHashMap<>();
 
-            for (Map.Entry<Geometry, Map<String, Object>> res : geometries.entrySet()) {
-                Geometry geometry = res.getKey();
-                Map<String, Object> props = res.getValue();
+            int _resolution = resolution;
+            geometries.entrySet().parallelStream()
+                    .forEach(res -> {
+                        Geometry geometry = res.getKey();
+                        Map<String, Object> props = res.getValue();
 
-                if (geometry instanceof Polygon) {
-                    Polygon p = (Polygon) geometry;
+                        if (geometry instanceof Polygon) {
+                            Polygon p = (Polygon) geometry;
 
-                    List<GeoCoord> gco = new ArrayList<>();
-                    for (Coordinate c : p.getCoordinates()) {
-                        gco.add(new GeoCoord(c.y, c.x));
-                    }
+                            List<GeoCoord> gco = new ArrayList<>();
+                            for (Coordinate c : p.getCoordinates()) {
+                                gco.add(new GeoCoord(c.y, c.x));
+                            }
 
-                    List<List<GeoCoord>> gci = new ArrayList<>();
-                    for (int i = p.getNumInteriorRing(); i > 0; ) {
-                        LineString ls = p.getInteriorRingN(--i);
+                            List<List<GeoCoord>> gci = new ArrayList<>();
+                            for (int i = p.getNumInteriorRing(); i > 0; ) {
+                                LineString ls = p.getInteriorRingN(--i);
 
-                        List<GeoCoord> gcii = new ArrayList<>();
-                        for (Coordinate c : ls.getCoordinates()) {
-                            gcii.add(new GeoCoord(c.y, c.x));
+                                List<GeoCoord> gcii = new ArrayList<>();
+                                for (Coordinate c : ls.getCoordinates()) {
+                                    gcii.add(new GeoCoord(c.y, c.x));
+                                }
+                                gci.add(gcii);
+                            }
+
+                            List<Long> polyfill = h3core.polyfill(gco, gci, _resolution);
+                            for (Long hash : polyfill) {
+                                hashes.put(hash, props);
+                            }
                         }
-                        gci.add(gcii);
-                    }
 
-                    List<Long> polyfill = h3core.polyfill(gco, gci, resolution);
-                    for (Long hash : polyfill) {
-                        hashes.put(hash, props);
-                    }
-                }
+                        if (geometry instanceof Point) {
+                            Coordinate c = geometry.getCoordinate();
 
-                if (geometry instanceof Point) {
-                    Coordinate c = geometry.getCoordinate();
-
-                    Long pointfill = h3core.geoToH3(c.y, c.x, resolution);
-                    hashes.put(pointfill, props);
-                }
-            }
+                            Long pointfill = h3core.geoToH3(c.y, c.x, _resolution);
+                            hashes.put(pointfill, props);
+                        }
+                    });
 
             try (CSVPrinter printer = new CSVPrinter(new BufferedWriter(new FileWriter(outFile), 4096 * 1024), CSVFormat.EXCEL.withDelimiter(COMMA))) {
                 for (Map.Entry<Long, Map<String, Object>> h : hashes.entrySet()) {
@@ -231,72 +274,78 @@ public class Main {
 
         if (KML.equals(out)) {
             de.micromata.opengis.kml.v_2_2_0.Kml kml = new de.micromata.opengis.kml.v_2_2_0.Kml();
-            de.micromata.opengis.kml.v_2_2_0.Document kmlCollection = kml.createAndSetDocument();
+            List<de.micromata.opengis.kml.v_2_2_0.Feature> kmlCollection = kml.createAndSetDocument().getFeature();
 
-            for (Map.Entry<Geometry, Map<String, Object>> res : geometries.entrySet()) {
-                de.micromata.opengis.kml.v_2_2_0.Placemark pm = kmlCollection.createAndAddPlacemark();
-                de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.createAndSetExtendedData();
+            Queue<de.micromata.opengis.kml.v_2_2_0.Placemark> pms = new ConcurrentLinkedQueue<>();
+            geometries.entrySet().parallelStream()
+                    .forEach(res -> {
+                        de.micromata.opengis.kml.v_2_2_0.Placemark pm = new de.micromata.opengis.kml.v_2_2_0.Placemark();
+                        pms.add(pm);
 
-                res.getValue().forEach((k, v) -> {
-                    switch (k) {
-                        case NAME: {
-                            pm.setName(String.valueOf(v));
-                            break;
+                        de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.createAndSetExtendedData();
+
+                        res.getValue().forEach((k, v) -> {
+                            switch (k) {
+                                case NAME: {
+                                    pm.setName(String.valueOf(v));
+                                    break;
+                                }
+                                case ADDRESS: {
+                                    pm.setAddress(String.valueOf(v));
+                                    break;
+                                }
+                                case ID: {
+                                    pm.setId(String.valueOf(v));
+                                    break;
+                                }
+                                case DESCRIPTION: {
+                                    pm.setDescription(String.valueOf(v));
+                                    break;
+                                }
+                                case PHONE_NUMBER: {
+                                    pm.setPhoneNumber(String.valueOf(v));
+                                    break;
+                                }
+                                default:
+                                    ed.createAndAddData(String.valueOf(v)).setName(k);
+                            }
+                        });
+
+                        Geometry geo = res.getKey();
+                        if (geo instanceof Polygon) {
+                            de.micromata.opengis.kml.v_2_2_0.Polygon pg = pm.createAndSetPolygon();
+
+                            List<de.micromata.opengis.kml.v_2_2_0.Coordinate> lc = pg
+                                    .createAndSetOuterBoundaryIs()
+                                    .createAndSetLinearRing()
+                                    .createAndSetCoordinates();
+
+                            for (Coordinate c : ((Polygon) geo).getExteriorRing().getCoordinates()) {
+                                lc.add(new de.micromata.opengis.kml.v_2_2_0.Coordinate(c.getX(), c.getY()));
+                            }
+
+                            for (int i = ((Polygon) geo).getNumInteriorRing(); i > 0; i--) {
+                                List<de.micromata.opengis.kml.v_2_2_0.Coordinate> lci = pg
+                                        .createAndAddInnerBoundaryIs()
+                                        .createAndSetLinearRing()
+                                        .createAndSetCoordinates();
+
+                                for (Coordinate c : ((Polygon) geo).getInteriorRingN(i - 1).getCoordinates()) {
+                                    lci.add(new de.micromata.opengis.kml.v_2_2_0.Coordinate(c.getX(), c.getY()));
+                                }
+                            }
                         }
-                        case ADDRESS: {
-                            pm.setAddress(String.valueOf(v));
-                            break;
+                        if (geo instanceof Point) {
+                            de.micromata.opengis.kml.v_2_2_0.Point pt = pm.createAndSetPoint();
+
+                            List<de.micromata.opengis.kml.v_2_2_0.Coordinate> lc = pt.createAndSetCoordinates();
+
+                            Coordinate c = geo.getCoordinate();
+                            lc.add(new de.micromata.opengis.kml.v_2_2_0.Coordinate(c.getX(), c.getY()));
                         }
-                        case ID: {
-                            pm.setId(String.valueOf(v));
-                            break;
-                        }
-                        case DESCRIPTION: {
-                            pm.setDescription(String.valueOf(v));
-                            break;
-                        }
-                        case PHONE_NUMBER: {
-                            pm.setPhoneNumber(String.valueOf(v));
-                            break;
-                        }
-                        default:
-                            ed.createAndAddData(String.valueOf(v)).setName(k);
-                    }
-                });
+                    });
 
-                Geometry geo = res.getKey();
-                if (geo instanceof Polygon) {
-                    de.micromata.opengis.kml.v_2_2_0.Polygon pg = pm.createAndSetPolygon();
-
-                    List<de.micromata.opengis.kml.v_2_2_0.Coordinate> lc = pg
-                            .createAndSetOuterBoundaryIs()
-                            .createAndSetLinearRing()
-                            .createAndSetCoordinates();
-
-                    for (Coordinate c : ((Polygon) geo).getExteriorRing().getCoordinates()) {
-                        lc.add(new de.micromata.opengis.kml.v_2_2_0.Coordinate(c.getX(), c.getY()));
-                    }
-
-                    for (int i = ((Polygon) geo).getNumInteriorRing(); i > 0; i--) {
-                        List<de.micromata.opengis.kml.v_2_2_0.Coordinate> lci = pg
-                                .createAndAddInnerBoundaryIs()
-                                .createAndSetLinearRing()
-                                .createAndSetCoordinates();
-
-                        for (Coordinate c : ((Polygon) geo).getInteriorRingN(i - 1).getCoordinates()) {
-                            lci.add(new de.micromata.opengis.kml.v_2_2_0.Coordinate(c.getX(), c.getY()));
-                        }
-                    }
-                }
-                if (geo instanceof Point) {
-                    de.micromata.opengis.kml.v_2_2_0.Point pt = pm.createAndSetPoint();
-
-                    List<de.micromata.opengis.kml.v_2_2_0.Coordinate> lc = pt.createAndSetCoordinates();
-
-                    Coordinate c = geo.getCoordinate();
-                    lc.add(new de.micromata.opengis.kml.v_2_2_0.Coordinate(c.getX(), c.getY()));
-                }
-            }
+            kmlCollection.addAll(pms);
 
             kml.marshal(outFile);
         }
@@ -304,11 +353,12 @@ public class Main {
         if (JSON.equals(out)) {
             GeoJSONWriter writer = new GeoJSONWriter();
 
-            List<Feature> fl = new ArrayList<>();
+            Queue<Feature> fl = new ConcurrentLinkedQueue<>();
 
-            geometries.forEach((k, v) -> fl.add(new Feature(writer.write(k), v)));
+            geometries.entrySet().parallelStream()
+                    .forEach(e -> fl.add(new Feature(writer.write(e.getKey()), e.getValue())));
 
-            FeatureCollection fc = writer.write(fl);
+            FeatureCollection fc = writer.write(new ArrayList<>(fl));
 
             ObjectMapper om = new ObjectMapper();
 
@@ -372,68 +422,72 @@ public class Main {
         }
     }
 
-    private static void feature(Map<Geometry, Map<String, Object>> result, de.micromata.opengis.kml.v_2_2_0.Feature feature) {
+    private static void container(List<de.micromata.opengis.kml.v_2_2_0.Container> containers, de.micromata.opengis.kml.v_2_2_0.Feature feature) {
         if (feature instanceof de.micromata.opengis.kml.v_2_2_0.Document) {
             de.micromata.opengis.kml.v_2_2_0.Document d = (de.micromata.opengis.kml.v_2_2_0.Document) feature;
 
             for (de.micromata.opengis.kml.v_2_2_0.Feature f : d.getFeature()) {
-                feature(result, f);
+                if (f instanceof de.micromata.opengis.kml.v_2_2_0.Container) {
+                    container(containers, f);
+                }
             }
+            containers.add(d);
         }
 
         if (feature instanceof de.micromata.opengis.kml.v_2_2_0.Folder) {
             de.micromata.opengis.kml.v_2_2_0.Folder fo = (de.micromata.opengis.kml.v_2_2_0.Folder) feature;
 
             for (de.micromata.opengis.kml.v_2_2_0.Feature f : fo.getFeature()) {
-                feature(result, f);
+                if (f instanceof de.micromata.opengis.kml.v_2_2_0.Container) {
+                    container(containers, f);
+                }
+            }
+            containers.add(fo);
+        }
+    }
+
+    private static void placemark(Map<Geometry, Map<String, Object>> result, de.micromata.opengis.kml.v_2_2_0.Placemark pm) {
+        Map<String, Object> properties = new HashMap<>();
+        de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.getExtendedData();
+        if (ed != null) {
+            List<de.micromata.opengis.kml.v_2_2_0.Data> d = ed.getData();
+            if (d != null) {
+                for (de.micromata.opengis.kml.v_2_2_0.Data dd : d) {
+                    properties.put(dd.getName(), dd.getValue());
+                }
             }
         }
+        String v = pm.getName();
+        if (v != null) {
+            properties.put(NAME, v);
+        }
+        v = pm.getAddress();
+        if (v != null) {
+            properties.put(ADDRESS, v);
+        }
+        v = pm.getId();
+        if (v != null) {
+            properties.put(ID, v);
+        }
+        v = pm.getDescription();
+        if (v != null) {
+            properties.put(DESCRIPTION, v);
+        }
+        v = pm.getPhoneNumber();
+        if (v != null) {
+            properties.put(PHONE_NUMBER, v);
+        }
 
-        if (feature instanceof de.micromata.opengis.kml.v_2_2_0.Placemark) {
-            de.micromata.opengis.kml.v_2_2_0.Placemark pm = (de.micromata.opengis.kml.v_2_2_0.Placemark) feature;
+        de.micromata.opengis.kml.v_2_2_0.Geometry g = pm.getGeometry();
+        if (g != null) {
+            if (g instanceof de.micromata.opengis.kml.v_2_2_0.MultiGeometry) {
+                de.micromata.opengis.kml.v_2_2_0.MultiGeometry mg = (de.micromata.opengis.kml.v_2_2_0.MultiGeometry) g;
 
-            Map<String, Object> properties = new HashMap<>();
-            de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.getExtendedData();
-            if (ed != null) {
-                List<de.micromata.opengis.kml.v_2_2_0.Data> d = ed.getData();
-                if (d != null) {
-                    for (de.micromata.opengis.kml.v_2_2_0.Data dd : d) {
-                        properties.put(dd.getName(), dd.getValue());
-                    }
+                for (de.micromata.opengis.kml.v_2_2_0.Geometry gg : mg.getGeometry()) {
+                    geometry(result, gg, properties);
                 }
-            }
-            String v = pm.getName();
-            if (v != null) {
-                properties.put(NAME, v);
-            }
-            v = pm.getAddress();
-            if (v != null) {
-                properties.put(ADDRESS, v);
-            }
-            v = pm.getId();
-            if (v != null) {
-                properties.put(ID, v);
-            }
-            v = pm.getDescription();
-            if (v != null) {
-                properties.put(DESCRIPTION, v);
-            }
-            v = pm.getPhoneNumber();
-            if (v != null) {
-                properties.put(PHONE_NUMBER, v);
-            }
-
-            de.micromata.opengis.kml.v_2_2_0.Geometry g = pm.getGeometry();
-            if (g != null) {
-                if (g instanceof de.micromata.opengis.kml.v_2_2_0.MultiGeometry) {
-                    de.micromata.opengis.kml.v_2_2_0.MultiGeometry mg = (de.micromata.opengis.kml.v_2_2_0.MultiGeometry) g;
-
-                    for (de.micromata.opengis.kml.v_2_2_0.Geometry gg : mg.getGeometry()) {
-                        geometry(result, gg, properties);
-                    }
-                } else {
-                    geometry(result, g, properties);
-                }
+            } else {
+                geometry(result, g, properties);
             }
         }
     }
