@@ -389,7 +389,7 @@ public class Main {
                 "   * supported attributes are name, address, id, description, phoneNumber,\n" +
                 "     while all other will be treated as extended data\n" +
                 "H3 notes:\n" +
-                "   * attributes is a comma-separated list of arbitrary but unique attribute names" +
+                "   * attributes is a comma-separated list of arbitrary but unique attribute names\n" +
                 "   * the only mandatory attribute is index which is treated as a hexadecimal string\n" +
                 "   * use _ (a single underscore) to skip a column\n" +
                 "   * resolution is an integer in the range of 0 to 15\n"
