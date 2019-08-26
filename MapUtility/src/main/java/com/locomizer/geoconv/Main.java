@@ -392,7 +392,15 @@ public class Main {
                 "   * attributes is a comma-separated list of arbitrary but unique attribute names\n" +
                 "   * the only mandatory attribute is index which is treated as a hexadecimal string\n" +
                 "   * use _ (a single underscore) to skip a column\n" +
-                "   * resolution is an integer in the range of 0 to 15\n"
+                "   * resolution is an integer in the range of 0 to 15\n" +
+                "Example 1:\n" +
+                "  Assume we need to cover an GeoJSON map of a country with h3 indices level 6\n" +
+                "  and then save resulting coverage as a KML file. This is a two-step process\n" +
+                "  1) java -jar locomizer-geoconv.jar json h3(6,index) /mnt/storage/Belarus.json /mnt/storage/Belarus-h3-6.csv\n" +
+                "  2) java -jar locomizer-geoconv.jar h3(index) kml /mnt/storage/Belarus-h3-6.csv /mnt/storage/Belarus-h3-6.kml\n" +
+                "Example 2:\n" +
+                "  Assume we need to extract h3 indices level 10 from an KML file along with names and descriptions\n" +
+                "  java -jar locomizer-geoconv.jar kml h3(10,index,name,description) /mnt/storage/Moscow-districts.json /mnt/storage/Moscow-districts-h3-10.csv\n"
         );
 
         System.exit(1);
