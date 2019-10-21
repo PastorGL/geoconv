@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 
-@SuppressWarnings({"ConstantConditions","Duplicates"})
+@SuppressWarnings({"ConstantConditions", "Duplicates"})
 public class Main {
     public static final String JSON = "json";
     public static final String KML = "kml";
@@ -238,15 +238,23 @@ public class Main {
                                 LineString ls = p.getInteriorRingN(--i);
 
                                 List<GeoCoord> gcii = new ArrayList<>();
-                                for (Coordinate c : ls.getCoordinates()) {
-                                    gcii.add(new GeoCoord(c.y, c.x));
+                                Coordinate[] coordinates = ls.getCoordinates();
+                                for (int j = coordinates.length - 1; j >= 0; j--) {
+                                    gcii.add(new GeoCoord(coordinates[j].y, coordinates[j].x));
                                 }
                                 gci.add(gcii);
                             }
 
-                            List<Long> polyfill = h3core.polyfill(gco, gci, _resolution);
+                            List<Long> polyfill = h3core.polyfill(gco, null, _resolution);
                             for (Long hash : polyfill) {
                                 hashes.put(hash, props);
+                            }
+
+                            for (List<GeoCoord> h : gci) {
+                                polyfill = h3core.polyfill(h, null, _resolution);
+                                for (Long hash : polyfill) {
+                                    hashes.remove(hash);
+                                }
                             }
                         }
 
