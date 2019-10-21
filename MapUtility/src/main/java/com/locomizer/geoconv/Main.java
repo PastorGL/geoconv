@@ -229,32 +229,22 @@ public class Main {
                             Polygon p = (Polygon) geometry;
 
                             List<GeoCoord> gco = new ArrayList<>();
-                            for (Coordinate c : p.getCoordinates()) {
+                            for (Coordinate c : p.getExteriorRing().getCoordinates()) {
                                 gco.add(new GeoCoord(c.y, c.x));
                             }
 
                             List<List<GeoCoord>> gci = new ArrayList<>();
                             for (int i = p.getNumInteriorRing(); i > 0; ) {
-                                LineString ls = p.getInteriorRingN(--i);
-
                                 List<GeoCoord> gcii = new ArrayList<>();
-                                Coordinate[] coordinates = ls.getCoordinates();
-                                for (int j = coordinates.length - 1; j >= 0; j--) {
-                                    gcii.add(new GeoCoord(coordinates[j].y, coordinates[j].x));
+                                for (Coordinate c : p.getInteriorRingN(--i).getCoordinates()) {
+                                    gcii.add(new GeoCoord(c.y, c.x));
                                 }
                                 gci.add(gcii);
                             }
 
-                            List<Long> polyfill = h3core.polyfill(gco, null, _resolution);
+                            List<Long> polyfill = h3core.polyfill(gco, gci, _resolution);
                             for (Long hash : polyfill) {
                                 hashes.put(hash, props);
-                            }
-
-                            for (List<GeoCoord> h : gci) {
-                                polyfill = h3core.polyfill(h, null, _resolution);
-                                for (Long hash : polyfill) {
-                                    hashes.remove(hash);
-                                }
                             }
                         }
 
