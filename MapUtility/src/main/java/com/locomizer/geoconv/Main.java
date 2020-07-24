@@ -22,6 +22,8 @@ import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -52,7 +54,7 @@ public class Main {
         }
 
         String in = null, out = null;
-        int resolution = -1;
+        int[] resolutions = {-1, -1};
         try {
             in = args[0].toLowerCase();
             if (!in.equals(JSON) && !in.equals(KML) && !in.startsWith(H_3)) {
@@ -94,14 +96,28 @@ public class Main {
             }
 
             try {
-                resolution = new Integer(columns.get(0));
+                Pattern resPattern = Pattern.compile("(\\d+)");
+
+                Matcher m = resPattern.matcher(columns.get(0));
+                if (m.find()) {
+                    resolutions[0] = Integer.parseInt(m.group(1));
+                    if (m.find()) {
+                        resolutions[1] = Integer.parseInt(m.group(1));
+                    }
+                } else {
+                    printHelpAndExit();
+                }
             } catch (Exception e) {
                 printHelpAndExit();
             }
 
-            if ((resolution < 0) || (resolution > 15)) {
-                printHelpAndExit();
+            for (int resolution : resolutions) {
+                if (resolution > 15) {
+                    printHelpAndExit();
+                }
             }
+
+            Arrays.sort(resolutions);
 
             columns.remove(0);
         }
@@ -219,42 +235,93 @@ public class Main {
 
             Map<Long, Map<String, Object>> hashes = new ConcurrentHashMap<>();
 
-            int _resolution = resolution;
-            geometries.entrySet().parallelStream()
-                    .forEach(res -> {
-                        Geometry geometry = res.getKey();
-                        Map<String, Object> props = res.getValue();
+            int curLev, maxLev;
+            if (resolutions[0] < 0) {
+                curLev = maxLev = resolutions[1];
+            } else {
+                curLev = resolutions[0];
+                maxLev = resolutions[1];
+            }
 
-                        if (geometry instanceof Polygon) {
-                            Polygon p = (Polygon) geometry;
+            Map<Geometry, Map<String, Object>> gmtrs = geometries;
 
-                            List<GeoCoord> gco = new ArrayList<>();
-                            for (Coordinate c : p.getExteriorRing().getCoordinates()) {
-                                gco.add(new GeoCoord(c.y, c.x));
-                            }
+            for (; curLev <= maxLev; curLev++) {
+                final int _level = curLev;
 
-                            List<List<GeoCoord>> gci = new ArrayList<>();
-                            for (int i = p.getNumInteriorRing(); i > 0; ) {
-                                List<GeoCoord> gcii = new ArrayList<>();
-                                for (Coordinate c : p.getInteriorRingN(--i).getCoordinates()) {
-                                    gcii.add(new GeoCoord(c.y, c.x));
+                gmtrs = gmtrs.entrySet().parallelStream()
+                        .map(res -> {
+                            Geometry geometry = res.getKey();
+                            Map<String, Object> props = res.getValue();
+
+                            if (geometry instanceof Polygon) {
+                                Polygon p = (Polygon) geometry;
+
+                                List<GeoCoord> gco = new ArrayList<>();
+                                LinearRing shell = (LinearRing) p.getExteriorRing();
+                                for (Coordinate c : shell.getCoordinates()) {
+                                    gco.add(new GeoCoord(c.y, c.x));
                                 }
-                                gci.add(gcii);
+
+                                List<LinearRing> holes = new ArrayList<>();
+
+                                List<List<GeoCoord>> gci = new ArrayList<>();
+                                for (int i = p.getNumInteriorRing(); i > 0; ) {
+                                    List<GeoCoord> gcii = new ArrayList<>();
+                                    LinearRing hole = (LinearRing) p.getInteriorRingN(--i);
+
+                                    for (Coordinate c : hole.getCoordinates()) {
+                                        gcii.add(new GeoCoord(c.y, c.x));
+                                    }
+                                    gci.add(gcii);
+
+                                    if (_level != maxLev) {
+                                        holes.add(hole);
+                                    }
+                                }
+
+                                Set<Long> polyfill = new HashSet<>(h3core.polyfill(gco, gci, _level));
+                                for (Long hash : polyfill) {
+                                    if (_level == maxLev) {
+                                        List<Long> neigh = h3core.kRing(hash, 1);
+                                        hashes.put(hash, props);
+                                        neigh.forEach(n -> hashes.putIfAbsent(n, props));
+                                    } else {
+                                        if (polyfill.containsAll(h3core.kRing(hash, 1))) {
+                                            if (_level != maxLev) {
+                                                List<GeoCoord> geo = h3core.h3ToGeoBoundary(hash);
+                                                geo.add(geo.get(0));
+
+                                                List<Coordinate> cl = new ArrayList<>();
+                                                geo.forEach(c -> cl.add(new Coordinate(c.lng, c.lat)));
+
+                                                Collections.reverse(cl);
+                                                LinearRing hole = FACTORY.createLinearRing(cl.toArray(new Coordinate[0]));
+                                                holes.add(hole);
+                                            }
+
+                                            hashes.put(hash, props);
+                                        }
+                                    }
+                                }
+
+                                if (_level != maxLev) {
+                                    geometry = FACTORY.createPolygon(shell, holes.toArray(new LinearRing[0]));
+                                }
                             }
 
-                            List<Long> polyfill = h3core.polyfill(gco, gci, _resolution);
-                            for (Long hash : polyfill) {
-                                hashes.put(hash, props);
+                            if (_level == maxLev) {
+                                if (geometry instanceof Point) {
+                                    Coordinate c = geometry.getCoordinate();
+
+                                    Long pointfill = h3core.geoToH3(c.y, c.x, _level);
+                                    hashes.put(pointfill, props);
+                                }
                             }
-                        }
 
-                        if (geometry instanceof Point) {
-                            Coordinate c = geometry.getCoordinate();
-
-                            Long pointfill = h3core.geoToH3(c.y, c.x, _resolution);
-                            hashes.put(pointfill, props);
-                        }
-                    });
+                            return new AbstractMap.SimpleEntry<>(geometry, props);
+                        })
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            }
 
             try (CSVPrinter printer = new CSVPrinter(new BufferedWriter(new FileWriter(outFile), 4096 * 1024), CSVFormat.EXCEL.withDelimiter(COMMA))) {
                 for (Map.Entry<Long, Map<String, Object>> h : hashes.entrySet()) {
@@ -404,7 +471,8 @@ public class Main {
         System.exit(1);
     }
 
-    private static void feature(Map<Geometry, Map<String, Object>> result, GeoJSONReader reader, Feature feature) {
+    private static void feature(Map<Geometry, Map<String, Object>> result, GeoJSONReader reader, Feature
+            feature) {
         Geometry geometry = reader.read(feature.getGeometry());
 
         Map<String, Object> fp = feature.getProperties();
@@ -428,7 +496,9 @@ public class Main {
         }
     }
 
-    private static void container(List<de.micromata.opengis.kml.v_2_2_0.Container> containers, de.micromata.opengis.kml.v_2_2_0.Feature feature) {
+    private static void container
+            (List<de.micromata.opengis.kml.v_2_2_0.Container> containers, de.micromata.opengis.kml.v_2_2_0.Feature
+                    feature) {
         if (feature instanceof de.micromata.opengis.kml.v_2_2_0.Document) {
             de.micromata.opengis.kml.v_2_2_0.Document d = (de.micromata.opengis.kml.v_2_2_0.Document) feature;
 
@@ -452,7 +522,8 @@ public class Main {
         }
     }
 
-    private static void placemark(Map<Geometry, Map<String, Object>> result, de.micromata.opengis.kml.v_2_2_0.Placemark pm) {
+    private static void placemark
+            (Map<Geometry, Map<String, Object>> result, de.micromata.opengis.kml.v_2_2_0.Placemark pm) {
         Map<String, Object> properties = new HashMap<>();
         de.micromata.opengis.kml.v_2_2_0.ExtendedData ed = pm.getExtendedData();
         if (ed != null) {
@@ -498,7 +569,9 @@ public class Main {
         }
     }
 
-    private static void geometry(Map<Geometry, Map<String, Object>> result, de.micromata.opengis.kml.v_2_2_0.Geometry geometry, Map<String, Object> properties) {
+    private static void geometry
+            (Map<Geometry, Map<String, Object>> result, de.micromata.opengis.kml.v_2_2_0.Geometry
+                    geometry, Map<String, Object> properties) {
         if ((geometry instanceof de.micromata.opengis.kml.v_2_2_0.Polygon)) {
             de.micromata.opengis.kml.v_2_2_0.Polygon p = (de.micromata.opengis.kml.v_2_2_0.Polygon) geometry;
 
