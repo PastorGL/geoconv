@@ -1,4 +1,6 @@
-Locomizer geospatial indexing and format converter utility
+## Locomizer geospatial indexing and format converter utility
+
+![Example of KML outline to compact H3 coverage to GeoJSON outlines conversion](README.png)
 
 To build an artifact, use maven
 `mvn clean package`
