@@ -442,6 +442,7 @@ public class Main {
                 "   * json\n" +
                 "   * kml\n" +
                 "   * h3(resolution,attributes)\n" +
+                "   * h3(res_from:res_to,attributes)\n" +
                 "General notes:\n" +
                 "   * output file will be overwritten without a prompt\n" +
                 "   * input and output formats must be different\n" +
@@ -458,14 +459,15 @@ public class Main {
                 "   * the only mandatory attribute is index which is treated as a hexadecimal string\n" +
                 "   * use _ (a single underscore) to skip a column\n" +
                 "   * resolution is an integer in the range of 0 to 15\n" +
+                "   * if two resolutions are specified, compact-ish coverage will be generated from lowest to highest\n" +
                 "Example 1:\n" +
-                "  Assume we need to cover an GeoJSON map of a country with h3 indices level 6\n" +
+                "  Assume us need to cover an GeoJSON map of a country with h3 indices level 6\n" +
                 "  and then save resulting coverage as a KML file. This is a two-step process\n" +
-                "  1) java -jar locomizer-geoconv.jar json h3(6,index) /mnt/storage/Belarus.json /mnt/storage/Belarus-h3-6.csv\n" +
-                "  2) java -jar locomizer-geoconv.jar h3(index) kml /mnt/storage/Belarus-h3-6.csv /mnt/storage/Belarus-h3-6.kml\n" +
+                "  1) java -jar locomizer-geoconv.jar json 'h3(6,index)' /mnt/storage/Belarus.json /mnt/storage/Belarus-h3-6.csv\n" +
+                "  2) java -jar locomizer-geoconv.jar 'h3(index)' kml /mnt/storage/Belarus-h3-6.csv /mnt/storage/Belarus-h3-6.kml\n" +
                 "Example 2:\n" +
-                "  Assume we need to extract h3 indices level 10 from an KML file along with names and descriptions\n" +
-                "  java -jar locomizer-geoconv.jar kml h3(10,index,name,description) /mnt/storage/Moscow-districts.json /mnt/storage/Moscow-districts-h3-10.csv\n"
+                "  Assume us need to extract compact h3 coverage with resolutions from 6 to 10 from an KML file along with names and descriptions\n" +
+                "  java -jar locomizer-geoconv.jar kml 'h3(6:10,index,name,description)' ./Moscow-districts.json ./Moscow-districts-h3-6-10.csv\n"
         );
 
         System.exit(1);
