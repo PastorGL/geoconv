@@ -28,13 +28,14 @@ import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 
-@SuppressWarnings({"ConstantConditions", "Duplicates"})
+@SuppressWarnings({"Duplicates"})
 public class Main {
     public static final String JSON = "json";
     public static final String KML = "kml";
     public static final String H_3 = "h3(";
 
-    public static final String INDEX = "index";
+    public static final String INDEX = "_index";
+    public static final String LEVEL = "_res";
     public static final String NAME = "name";
     public static final String ADDRESS = "address";
     public static final String ID = "id";
@@ -252,6 +253,8 @@ public class Main {
                         .map(res -> {
                             Geometry geometry = res.getKey();
                             Map<String, Object> props = res.getValue();
+                            Map<String, Object> np = new HashMap<>(props);
+                            np.put(LEVEL, _level);
 
                             if (geometry instanceof Polygon) {
                                 Polygon p = (Polygon) geometry;
@@ -283,23 +286,21 @@ public class Main {
                                 for (Long hash : polyfill) {
                                     if (_level == maxLev) {
                                         List<Long> neigh = h3core.kRing(hash, 1);
-                                        hashes.put(hash, props);
-                                        neigh.forEach(n -> hashes.putIfAbsent(n, props));
+                                        hashes.put(hash, np);
+                                        neigh.forEach(n -> hashes.putIfAbsent(n, np));
                                     } else {
                                         if (polyfill.containsAll(h3core.kRing(hash, 1))) {
-                                            if (_level != maxLev) {
-                                                List<GeoCoord> geo = h3core.h3ToGeoBoundary(hash);
-                                                geo.add(geo.get(0));
+                                            List<GeoCoord> geo = h3core.h3ToGeoBoundary(hash);
+                                            geo.add(geo.get(0));
 
-                                                List<Coordinate> cl = new ArrayList<>();
-                                                geo.forEach(c -> cl.add(new Coordinate(c.lng, c.lat)));
+                                            List<Coordinate> cl = new ArrayList<>();
+                                            geo.forEach(c -> cl.add(new Coordinate(c.lng, c.lat)));
 
-                                                Collections.reverse(cl);
-                                                LinearRing hole = FACTORY.createLinearRing(cl.toArray(new Coordinate[0]));
-                                                holes.add(hole);
-                                            }
+                                            Collections.reverse(cl);
+                                            LinearRing hole = FACTORY.createLinearRing(cl.toArray(new Coordinate[0]));
+                                            holes.add(hole);
 
-                                            hashes.put(hash, props);
+                                            hashes.put(hash, np);
                                         }
                                     }
                                 }
@@ -456,18 +457,19 @@ public class Main {
                 "     while all other will be treated as extended data\n" +
                 "H3 notes:\n" +
                 "   * attributes is a comma-separated list of arbitrary but unique attribute names\n" +
-                "   * the only mandatory attribute is index which is treated as a hexadecimal string\n" +
+                "   * the only mandatory attribute is _index which is treated as a hexadecimal string\n" +
+                "   * to output resolution of a given index, use attribute _res\n" +
                 "   * use _ (a single underscore) to skip a column\n" +
                 "   * resolution is an integer in the range of 0 to 15\n" +
                 "   * if two resolutions are specified, compact-ish coverage will be generated from lowest to highest\n" +
                 "Example 1:\n" +
                 "  Assume us need to cover an GeoJSON map of a country with h3 indices level 6\n" +
                 "  and then save resulting coverage as a KML file. This is a two-step process\n" +
-                "  1) java -jar locomizer-geoconv.jar json 'h3(6,index)' /mnt/storage/Belarus.json /mnt/storage/Belarus-h3-6.csv\n" +
-                "  2) java -jar locomizer-geoconv.jar 'h3(index)' kml /mnt/storage/Belarus-h3-6.csv /mnt/storage/Belarus-h3-6.kml\n" +
+                "  1) java -jar locomizer-geoconv.jar json 'h3(6,_index)' /mnt/storage/Belarus.json /mnt/storage/Belarus-h3-6.csv\n" +
+                "  2) java -jar locomizer-geoconv.jar 'h3(_index)' kml /mnt/storage/Belarus-h3-6.csv /mnt/storage/Belarus-h3-6.kml\n" +
                 "Example 2:\n" +
                 "  Assume us need to extract compact h3 coverage with resolutions from 6 to 10 from an KML file along with names and descriptions\n" +
-                "  java -jar locomizer-geoconv.jar kml 'h3(6:10,index,name,description)' ./Moscow-districts.json ./Moscow-districts-h3-6-10.csv\n"
+                "  java -jar locomizer-geoconv.jar kml 'h3(6:10,_index,_res,name,description)' ./Moscow-districts.json ./Moscow-districts-h3-6-10.csv\n"
         );
 
         System.exit(1);
